@@ -1,26 +1,68 @@
 {
-  "name": "terminal",
-  "version": "0.1.0",
+  "name": "ordr-terminal",
+  "version": "1.0.0",
+  "description": "ORDR local print terminal",
+  "author": "ORDR",
   "private": true,
+  "main": "electron/main.cjs",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --port 3020",
+    "electron": "cross-env ORDR_TERMINAL_URL=http://localhost:3020 electron electron/main.cjs",
+    "dev:electron": "concurrently \"npm run dev\" \"wait-on http://localhost:3020 && npm run electron\"",
     "build": "next build",
-    "start": "next start",
-    "lint": "eslint"
+    "dist": "next build && electron-builder --win",
+    "dist:dir": "next build && electron-builder --win --dir"
   },
   "dependencies": {
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
     "next": "16.2.6",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "wait-on": "^9.0.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^42.0.1",
+    "electron-builder": "^26.8.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
+    "tsx": "^4.21.0",
     "typescript": "^5"
+  },
+  "build": {
+    "appId": "br.com.panelordr.terminal",
+    "productName": "ORDR Terminal",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**",
+      "out/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "ORDR-Terminal-Setup.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ORDR Terminal"
+    },
+    "protocols": [
+      {
+        "name": "ORDR Terminal",
+        "schemes": [
+          "ordr-terminal"
+        ]
+      }
+    ]
   }
 }

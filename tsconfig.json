@@ -26,9 +26,10 @@
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
+    "**/*.d.ts",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     "**/*.mts"
-  ],
+, "electron/preload.cjs", "electron/main.cjs"  ],
   "exclude": ["node_modules"]
 }
