@@ -9,6 +9,7 @@ const { promisify } = require('util')
 const execFileAsync = promisify(execFile)
 
 const PROTOCOL = 'ordr-terminal'
+const API_BASE_URL = 'https://api.panelordr.com.br'
 const SESSION_FILE = 'terminal-session.json'
 const DEVICE_IDS_FILE = 'terminal-device-ids.json'
 
@@ -38,6 +39,51 @@ if (!gotTheLock) {
 
 function getSessionPath() {
   return path.join(app.getPath('userData'), SESSION_FILE)
+}
+
+function readSavedSession() {
+  const filePath = getSessionPath()
+
+  if (!fs.existsSync(filePath)) return null
+
+  try {
+    const encrypted = fs.readFileSync(filePath, 'utf8')
+    const raw = safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
+      : Buffer.from(encrypted, 'base64').toString('utf8')
+
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch (error) {
+    console.warn('[terminal] Failed to read saved session:', error)
+    return null
+  }
+}
+
+async function disconnectSavedTerminalSession() {
+  const session = readSavedSession()
+  const token = typeof session?.token === 'string' ? session.token : null
+  const companyId = normalizeCompanyId(session?.user?.currentCompany?.id || session?.user?.companyId)
+
+  if (!token || !companyId) return { ok: false, reason: 'missing-session' }
+
+  const deviceId = readDeviceIds()[companyId]
+
+  if (!deviceId) return { ok: false, reason: 'missing-device-id' }
+
+  try {
+    await electronNetJsonRequest({
+      url: `${API_BASE_URL}/devices/terminal-disconnect`,
+      method: 'POST',
+      token,
+      body: { deviceId },
+    })
+
+    return { ok: true }
+  } catch (error) {
+    console.warn('[terminal] Failed to disconnect terminal before quitting:', error)
+    return { ok: false, reason: error?.message || 'request-failed' }
+  }
 }
 
 function getDeviceIdsPath() {
@@ -247,8 +293,9 @@ function createTray() {
     { type: 'separator' },
     {
       label: 'Desligar terminal',
-      click: () => {
+      click: async () => {
         isQuitting = true
+        await disconnectSavedTerminalSession()
         app.quit()
       },
     },
@@ -358,6 +405,7 @@ ipcMain.handle('terminal:open-external', async (_event, url) => {
 
 ipcMain.handle('terminal:shutdown', async () => {
   isQuitting = true
+  await disconnectSavedTerminalSession()
 
   if (staticServer) {
     staticServer.close()
@@ -925,6 +973,7 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true
+  disconnectSavedTerminalSession().catch(() => null)
 })
 
 app.on('window-all-closed', () => {
