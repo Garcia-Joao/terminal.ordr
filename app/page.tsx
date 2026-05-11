@@ -355,6 +355,7 @@ export default function TerminalPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [isRegistering, setIsRegistering] = useState(false)
   const [bindingPortId, setBindingPortId] = useState<string | null>(null)
+  const [processingJobIds, setProcessingJobIds] = useState<string[]>([])
   const [lastPollAt, setLastPollAt] = useState<string | null>(null)
   const [lastUpdateCheckAt, setLastUpdateCheckAt] = useState<string | null>(null)
   const [persistedDeviceId, setPersistedDeviceId] = useState<string | null>(null)
@@ -366,6 +367,15 @@ export default function TerminalPage() {
 
   const pollingRef = useRef(false)
   const bootedRef = useRef(false)
+
+  const isJobProcessing = (jobId: string) => processingJobIds.includes(jobId)
+
+  function setJobProcessing(jobId: string, processing: boolean) {
+    setProcessingJobIds((current) => {
+      if (processing) return current.includes(jobId) ? current : [...current, jobId]
+      return current.filter((id) => id !== jobId)
+    })
+  }
 
   const currentCompany = user?.currentCompany ?? user?.companies?.find((company) => company.id === user.companyId) ?? null
   const canBeTerminal = Boolean(isElectron && currentCompany?.systemRole === 'ADMIN')
@@ -888,6 +898,50 @@ export default function TerminalPage() {
         errorMessage,
       }),
     })
+
+    if (status === 'PRINTED') {
+      setJobs((current) => current.filter((job) => job.id !== jobId))
+    }
+  }
+
+  async function claimJob(jobId: string) {
+    if (!registeredDevice?.id) {
+      throw new Error('Terminal não registrado.')
+    }
+
+    await apiFetch(`/print-jobs/${jobId}/claim`, {
+      method: 'POST',
+      body: JSON.stringify({
+        terminalDeviceId: registeredDevice.id,
+      }),
+    })
+  }
+
+  async function removeJob(job: PrintJob) {
+    if (!registeredDevice?.id) {
+      setError('Terminal não registrado.')
+      return
+    }
+
+    const confirmed = window.confirm('Remover este item da fila? Ele não será impresso.')
+    if (!confirmed) return
+
+    try {
+      setJobProcessing(job.id, true)
+      setError('')
+
+      await apiFetch(`/print-jobs/${job.id}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ terminalDeviceId: registeredDevice.id }),
+      })
+
+      setJobs((current) => current.filter((currentJob) => currentJob.id !== job.id))
+      notify({ tone: 'info', title: 'Job removido', text: `${getJobKind(job)} saiu da fila.` })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Erro ao remover job da fila.')
+    } finally {
+      setJobProcessing(job.id, false)
+    }
   }
 
   async function printJob(job: PrintJob) {
@@ -927,6 +981,27 @@ export default function TerminalPage() {
     await updateJobStatus(job.id, 'PRINTED')
   }
 
+  async function manuallyPrintJob(job: PrintJob) {
+    try {
+      setJobProcessing(job.id, true)
+      setError('')
+
+      if (job.status === 'PENDING') {
+        await claimJob(job.id)
+      }
+
+      await printJob(job)
+      notify({ tone: 'success', title: 'Job impresso', text: `${getJobKind(job)} enviado e removido da fila.` })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Erro ao imprimir job.'
+      setError(message)
+      await updateJobStatus(job.id, 'FAILED', message).catch(() => null)
+    } finally {
+      setJobProcessing(job.id, false)
+      await pollJobs().catch(() => null)
+    }
+  }
+
   async function pollJobs(options?: { manual?: boolean }) {
     if (!registeredDevice?.id || pollingRef.current) return
 
@@ -952,12 +1027,9 @@ export default function TerminalPage() {
 
       for (const job of result.jobs ?? []) {
         try {
-          await apiFetch(`/print-jobs/${job.id}/claim`, {
-            method: 'POST',
-            body: JSON.stringify({
-              terminalDeviceId: registeredDevice.id,
-            }),
-          })
+          if (job.status === 'PENDING') {
+            await claimJob(job.id)
+          }
           await printJob(job)
         } catch (err) {
           await updateJobStatus(job.id, 'FAILED', err instanceof Error ? err.message : 'Erro ao imprimir.').catch(() => null)
@@ -1235,19 +1307,47 @@ export default function TerminalPage() {
             </div>
 
             <div className="queue-list">
-              {jobs.map((job) => (
-                <article key={job.id} className="queue-card">
-                  <div className="queue-icon">{getJobKind(job).slice(0, 1)}</div>
-                  <div className="queue-main">
-                    <strong>{job.port?.name || 'Sem port'}</strong>
-                    <span>{getJobKind(job)} · {getJobSummary(job)}</span>
-                    <small>{formatDateTime(job.createdAt)}</small>
-                  </div>
-                  <div className={`queue-status status-${job.status?.toLowerCase?.() ?? 'pending'}`}>
-                    {getStatusLabel(job.status)}
-                  </div>
-                </article>
-              ))}
+              {jobs.map((job) => {
+                const processing = isJobProcessing(job.id)
+                const manualActionsEnabled = !autoPrint && registeredDevice?.id
+
+                return (
+                  <article key={job.id} className="queue-card">
+                    <div className="queue-icon">{getJobKind(job).slice(0, 1)}</div>
+                    <div className="queue-main">
+                      <strong>{job.port?.name || 'Sem port'}</strong>
+                      <span>{getJobKind(job)} · {getJobSummary(job)}</span>
+                      <small>{formatDateTime(job.createdAt)}</small>
+                    </div>
+                    <div className="queue-side">
+                      <div className={`queue-status status-${job.status?.toLowerCase?.() ?? 'pending'}`}>
+                        {processing ? 'Processando' : getStatusLabel(job.status)}
+                      </div>
+
+                      {!autoPrint && (
+                        <div className="queue-actions">
+                          <button
+                            type="button"
+                            className="queue-action print"
+                            disabled={!manualActionsEnabled || processing}
+                            onClick={() => manuallyPrintJob(job)}
+                          >
+                            Imprimir
+                          </button>
+                          <button
+                            type="button"
+                            className="queue-action remove"
+                            disabled={!manualActionsEnabled || processing}
+                            onClick={() => removeJob(job)}
+                          >
+                            Remover
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                )
+              })}
 
               {jobs.length === 0 && (
                 <EmptyState

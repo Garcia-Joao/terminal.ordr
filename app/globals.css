@@ -697,13 +697,58 @@ button:disabled {
   white-space: nowrap;
 }
 
+.queue-side {
+  display: grid;
+  justify-items: end;
+  gap: 0.55rem;
+}
+
 .queue-status {
+  width: fit-content;
   padding: 0.45rem 0.62rem;
   border-radius: 999px;
   background: rgba(255,255,255,0.06);
   color: var(--terminal-muted);
   font-size: 0.74rem;
   font-weight: 950;
+}
+
+.queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.42rem;
+}
+
+.queue-action {
+  min-height: 2.1rem;
+  border: 1px solid var(--terminal-border);
+  border-radius: 999px;
+  padding: 0 0.72rem;
+  color: var(--terminal-text);
+  font-size: 0.72rem;
+  font-weight: 950;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease, opacity 0.16s ease;
+}
+
+.queue-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.queue-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.queue-action.print {
+  border-color: rgba(34, 197, 94, 0.32);
+  background: rgba(34, 197, 94, 0.14);
+}
+
+.queue-action.remove {
+  border-color: rgba(239, 68, 68, 0.28);
+  background: rgba(239, 68, 68, 0.10);
 }
 
 .status-pending,
@@ -1273,6 +1318,16 @@ button:disabled {
   .queue-card,
   .local-printer-card {
     grid-template-columns: 1fr;
+  }
+
+  .queue-side,
+  .queue-actions {
+    justify-items: stretch;
+    justify-content: stretch;
+  }
+
+  .queue-action {
+    flex: 1;
   }
 
   .selected-port-head,
