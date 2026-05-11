@@ -9,7 +9,6 @@ const { promisify } = require('util')
 const execFileAsync = promisify(execFile)
 
 const PROTOCOL = 'ordr-terminal'
-const API_BASE_URL = 'https://api.panelordr.com.br'
 const SESSION_FILE = 'terminal-session.json'
 const DEVICE_IDS_FILE = 'terminal-device-ids.json'
 
@@ -20,6 +19,12 @@ let pendingLaunchToken = null
 let lastHandledProtocolRequestId = null
 let isQuitting = false
 let terminalSessionActive = false
+
+// Keep the renderer active while the window is hidden in the tray.
+// Without this, Chromium can throttle timers/network polling and print jobs only run
+// after the user opens the Terminal again.
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.setAppUserModelId('br.com.panelordr.terminal')
 
 if (process.defaultApp) {
   if (process.argv.length >= 2) {
@@ -39,51 +44,6 @@ if (!gotTheLock) {
 
 function getSessionPath() {
   return path.join(app.getPath('userData'), SESSION_FILE)
-}
-
-function readSavedSession() {
-  const filePath = getSessionPath()
-
-  if (!fs.existsSync(filePath)) return null
-
-  try {
-    const encrypted = fs.readFileSync(filePath, 'utf8')
-    const raw = safeStorage.isEncryptionAvailable()
-      ? safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
-      : Buffer.from(encrypted, 'base64').toString('utf8')
-
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? parsed : null
-  } catch (error) {
-    console.warn('[terminal] Failed to read saved session:', error)
-    return null
-  }
-}
-
-async function disconnectSavedTerminalSession() {
-  const session = readSavedSession()
-  const token = typeof session?.token === 'string' ? session.token : null
-  const companyId = normalizeCompanyId(session?.user?.currentCompany?.id || session?.user?.companyId)
-
-  if (!token || !companyId) return { ok: false, reason: 'missing-session' }
-
-  const deviceId = readDeviceIds()[companyId]
-
-  if (!deviceId) return { ok: false, reason: 'missing-device-id' }
-
-  try {
-    await electronNetJsonRequest({
-      url: `${API_BASE_URL}/devices/terminal-disconnect`,
-      method: 'POST',
-      token,
-      body: { deviceId },
-    })
-
-    return { ok: true }
-  } catch (error) {
-    console.warn('[terminal] Failed to disconnect terminal before quitting:', error)
-    return { ok: false, reason: error?.message || 'request-failed' }
-  }
 }
 
 function getDeviceIdsPath() {
@@ -293,9 +253,8 @@ function createTray() {
     { type: 'separator' },
     {
       label: 'Desligar terminal',
-      click: async () => {
+      click: () => {
         isQuitting = true
-        await disconnectSavedTerminalSession()
         app.quit()
       },
     },
@@ -324,6 +283,7 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   })
 
@@ -405,7 +365,6 @@ ipcMain.handle('terminal:open-external', async (_event, url) => {
 
 ipcMain.handle('terminal:shutdown', async () => {
   isQuitting = true
-  await disconnectSavedTerminalSession()
 
   if (staticServer) {
     staticServer.close()
@@ -973,7 +932,6 @@ app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   isQuitting = true
-  disconnectSavedTerminalSession().catch(() => null)
 })
 
 app.on('window-all-closed', () => {

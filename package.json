@@ -47,7 +47,8 @@
     ],
     "win": {
       "target": "nsis",
-      "artifactName": "ORDR-Terminal-Setup.exe"
+      "artifactName": "ORDR-Terminal-Setup.exe",
+      "icon": "electron/assets/icon.ico"
     },
     "nsis": {
       "oneClick": false,

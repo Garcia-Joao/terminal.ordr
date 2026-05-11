@@ -261,10 +261,11 @@ function buildBuyListText(job: PrintJob) {
   return lines.join('\n')
 }
 
-function buildOrderTicketText(job: PrintJob) {
+function buildOrderTicketText(job: PrintJob, ticket?: any) {
   const payload = job.payload ?? {}
   const template = payload.template ?? {}
   const lines: string[] = []
+  const ticketItems = Array.isArray(ticket?.items) ? ticket.items : payload.items ?? []
 
   lines.push(template.headerText?.trim() || '*** ORDR ***')
 
@@ -282,7 +283,7 @@ function buildOrderTicketText(job: PrintJob) {
   lines.push('------------------------------')
 
   if (isFieldEnabled(template, 'items')) {
-    for (const item of payload.items ?? []) {
+    for (const item of ticketItems) {
       lines.push(`${item.quantity}x ${item.name}`)
 
       if (isFieldEnabled(template, 'variations')) {
@@ -316,12 +317,18 @@ function buildOrderTicketText(job: PrintJob) {
   return lines.join('\n')
 }
 
-function buildTicketText(job: PrintJob) {
+function buildTicketTexts(job: PrintJob) {
   if (job.payload?.kind === 'BUY_LIST' || job.type === 'BUY_LIST') {
-    return buildBuyListText(job)
+    return [buildBuyListText(job)]
   }
 
-  return buildOrderTicketText(job)
+  const tickets = Array.isArray(job.payload?.tickets) ? job.payload.tickets : []
+
+  if (tickets.length === 0) {
+    return [buildOrderTicketText(job)]
+  }
+
+  return tickets.map((ticket: any) => buildOrderTicketText(job, ticket))
 }
 
 function buildTestPrintText(target: string) {
@@ -1062,20 +1069,22 @@ export default function TerminalPage() {
 
     await updateJobStatus(job.id, 'PRINTING')
 
-    for (const binding of bindings) {
-      const text = buildTicketText(job)
+    const ticketTexts = buildTicketTexts(job)
 
-      if (window.ordrTerminal?.printRawText) {
-        await window.ordrTerminal.printRawText({
-          printerName: binding.localPrinterName,
-          text,
-          cut: true,
-        })
-      } else {
-        await window.ordrTerminal!.printText({
-          printerName: binding.localPrinterName,
-          text,
-        })
+    for (const binding of bindings) {
+      for (const text of ticketTexts) {
+        if (window.ordrTerminal?.printRawText) {
+          await window.ordrTerminal.printRawText({
+            printerName: binding.localPrinterName,
+            text,
+            cut: true,
+          })
+        } else {
+          await window.ordrTerminal!.printText({
+            printerName: binding.localPrinterName,
+            text,
+          })
+        }
       }
     }
 
