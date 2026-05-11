@@ -81,6 +81,7 @@ type PrintPort = {
 
 type PrintJob = {
   id: string
+  type?: string
   payload: any
   port?: PrintPort | null
   status: string
@@ -186,41 +187,141 @@ function formatRelativeStatus(value?: string | null) {
   return `${hours}h atrás`
 }
 
-function buildTicketText(job: PrintJob) {
+function isFieldEnabled(template: any, field: string, fallback = true) {
+  if (!template?.enabledFields) return fallback
+  if (template.enabledFields[field] === undefined) return fallback
+  return Boolean(template.enabledFields[field])
+}
+
+function formatJobDate(value?: string | null) {
+  const date = value ? new Date(value) : new Date()
+  return Number.isNaN(date.getTime()) ? new Date().toLocaleString('pt-BR') : date.toLocaleString('pt-BR')
+}
+
+function buildBuyListText(job: PrintJob) {
   const payload = job.payload ?? {}
+  const template = payload.template ?? {}
   const lines: string[] = []
 
-  lines.push('*** ORDR ***')
-  lines.push(payload.port?.name || job.port?.name || 'TICKET')
-  lines.push(`Pedido: ${payload.orderId || job.id}`)
+  lines.push(template.headerText?.trim() || '*** LISTA DE COMPRAS ***')
 
-  if (payload.comanda) lines.push(`Comanda: ${payload.comanda}`)
-  if (payload.comandaName) lines.push(`Nome: ${payload.comandaName}`)
+  if (isFieldEnabled(template, 'requestTitle') && payload.buyRequestTitle) {
+    lines.push(String(payload.buyRequestTitle))
+  }
+
+  if (isFieldEnabled(template, 'requestId')) {
+    lines.push(`REQ: ${payload.buyRequestId || job.id}`)
+  }
+
+  if (isFieldEnabled(template, 'supplierName') && payload.supplierName) {
+    lines.push(`LOCAL: ${payload.supplierName}`)
+  }
+
+  if (isFieldEnabled(template, 'eventName') && payload.eventName) {
+    lines.push(`EVENTO: ${payload.eventName}`)
+  }
+
+  if (isFieldEnabled(template, 'date')) {
+    lines.push(`DATA: ${formatJobDate(payload.createdAt)}`)
+  }
+
+  if (isFieldEnabled(template, 'notes') && payload.notes) {
+    lines.push('OBS REQUISICAO:')
+    lines.push(String(payload.notes))
+  }
 
   lines.push('------------------------------')
 
-  for (const item of payload.items ?? []) {
-    lines.push(`${item.quantity}x ${item.name}`)
+  let currentCategory = ''
 
-    for (const variation of item.variations ?? []) {
-      lines.push(`  - ${variation}`)
+  for (const item of payload.items ?? []) {
+    const categoryName = item.categoryName || 'Sem categoria'
+
+    if (isFieldEnabled(template, 'categories') && categoryName !== currentCategory) {
+      currentCategory = categoryName
+      lines.push(categoryName.toUpperCase())
     }
 
-    if (item.notes) {
+    const box = isFieldEnabled(template, 'checklistBoxes') ? '□ ' : ''
+    const quantity = item.quantityLabel || item.quantity || ''
+    lines.push(`${box}${quantity} ${item.name}`.trim())
+
+    if (isFieldEnabled(template, 'itemNotes') && item.notes) {
       lines.push(`  Obs: ${item.notes}`)
     }
   }
 
-  if (payload.observation) {
+  lines.push('------------------------------')
+
+  if (template.footerText?.trim()) {
+    lines.push(template.footerText.trim())
+  }
+
+  lines.push('', '', '')
+  return lines.join('\n')
+}
+
+function buildOrderTicketText(job: PrintJob) {
+  const payload = job.payload ?? {}
+  const template = payload.template ?? {}
+  const lines: string[] = []
+
+  lines.push(template.headerText?.trim() || '*** ORDR ***')
+
+  if (isFieldEnabled(template, 'portName')) {
+    lines.push(payload.port?.name || job.port?.name || 'TICKET')
+  }
+
+  if (isFieldEnabled(template, 'orderId')) {
+    lines.push(`Pedido: ${payload.orderId || job.id}`)
+  }
+
+  if (isFieldEnabled(template, 'comanda') && payload.comanda) lines.push(`Comanda: ${payload.comanda}`)
+  if (isFieldEnabled(template, 'comandaName') && payload.comandaName) lines.push(`Nome: ${payload.comandaName}`)
+
+  lines.push('------------------------------')
+
+  if (isFieldEnabled(template, 'items')) {
+    for (const item of payload.items ?? []) {
+      lines.push(`${item.quantity}x ${item.name}`)
+
+      if (isFieldEnabled(template, 'variations')) {
+        for (const variation of item.variations ?? []) {
+          lines.push(`  - ${variation}`)
+        }
+      }
+
+      if (isFieldEnabled(template, 'notes') && item.notes) {
+        lines.push(`  Obs: ${item.notes}`)
+      }
+    }
+  }
+
+  if (isFieldEnabled(template, 'observation') && payload.observation) {
     lines.push('------------------------------')
     lines.push(`Obs: ${payload.observation}`)
   }
 
   lines.push('------------------------------')
-  lines.push(new Date().toLocaleString('pt-BR'))
-  lines.push('', '', '')
 
+  if (isFieldEnabled(template, 'date')) {
+    lines.push(formatJobDate(payload.createdAt))
+  }
+
+  if (template.footerText?.trim()) {
+    lines.push(template.footerText.trim())
+  }
+
+  lines.push('', '', '')
   return lines.join('\n')
+}
+
+function buildTicketText(job: PrintJob) {
+  if (job.payload?.kind === 'BUY_LIST' || job.type === 'BUY_LIST') {
+    return buildBuyListText(job)
+  }
+
+  return buildOrderTicketText(job)
 }
 
 function buildTestPrintText(target: string) {
