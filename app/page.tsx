@@ -202,7 +202,6 @@ function buildBuyListText(job: PrintJob) {
   const payload = job.payload ?? {}
   const template = payload.template ?? {}
   const lines: string[] = []
-
   lines.push(template.headerText?.trim() || '*** LISTA DE COMPRAS ***')
 
   if (isFieldEnabled(template, 'requestTitle') && payload.buyRequestTitle) {
@@ -242,7 +241,7 @@ function buildBuyListText(job: PrintJob) {
       lines.push(categoryName.toUpperCase())
     }
 
-    const box = isFieldEnabled(template, 'checklistBoxes') ? '□ ' : ''
+    const box = isFieldEnabled(template, 'checklistBoxes') ? '[ ] ' : ''
     const quantity = item.quantityLabel || item.quantity || ''
     lines.push(`${box}${quantity} ${item.name}`.trim())
 
@@ -264,9 +263,12 @@ function buildBuyListText(job: PrintJob) {
 function buildOrderTicketText(job: PrintJob, ticket?: any) {
   const payload = job.payload ?? {}
   const template = payload.template ?? {}
+  const ticketItems = Array.isArray(ticket?.items)
+    ? ticket.items
+    : Array.isArray(payload.items)
+      ? payload.items
+      : []
   const lines: string[] = []
-  const ticketItems = Array.isArray(ticket?.items) ? ticket.items : payload.items ?? []
-
   lines.push(template.headerText?.trim() || '*** ORDR ***')
 
   if (isFieldEnabled(template, 'portName')) {
@@ -317,9 +319,64 @@ function buildOrderTicketText(job: PrintJob, ticket?: any) {
   return lines.join('\n')
 }
 
+
+function formatCurrencyValue(value?: number | string | null) {
+  const number = Number(value ?? 0)
+  return `R$ ${number.toFixed(2).replace('.', ',')}`
+}
+
+function buildReceiptText(job: PrintJob) {
+  const payload = job.payload ?? {}
+  const lines: string[] = []
+
+  lines.push('*** ORDR ***')
+  lines.push('RECIBO DO CAIXA')
+  lines.push('------------------------------')
+  lines.push(`Pedido: ${payload.orderId || job.id}`)
+  if (payload.comanda) lines.push(`Comanda: ${payload.comanda}`)
+  if (payload.comandaName) lines.push(`Nome: ${payload.comandaName}`)
+  if (payload.paymentMethodLabel) lines.push(`Pagamento: ${payload.paymentMethodLabel}`)
+
+  const dateValue = payload.paidAt || payload.createdAt
+  lines.push(`Data: ${formatJobDate(dateValue)}`)
+  lines.push('------------------------------')
+
+  for (const item of payload.items ?? []) {
+    lines.push(`${item.quantity}x ${item.name}`)
+
+    for (const variation of item.variations ?? []) {
+      lines.push(`  - ${variation}`)
+    }
+
+    if (item.notes) {
+      lines.push(`  Obs: ${item.notes}`)
+    }
+
+    lines.push(`  ${formatCurrencyValue(item.totalPrice)}`)
+  }
+
+  lines.push('------------------------------')
+  lines.push(`Subtotal: ${formatCurrencyValue(payload.subtotal)}`)
+
+  if (payload.taxApplied) {
+    lines.push(`Taxa 10%: ${formatCurrencyValue(payload.taxAmount)}`)
+  }
+
+  lines.push(`TOTAL: ${formatCurrencyValue(payload.total)}`)
+  lines.push('------------------------------')
+  lines.push('Obrigado pela preferencia!')
+  lines.push('', '', '')
+
+  return lines.join('\n')
+}
+
 function buildTicketTexts(job: PrintJob) {
   if (job.payload?.kind === 'BUY_LIST' || job.type === 'BUY_LIST') {
     return [buildBuyListText(job)]
+  }
+
+  if (job.payload?.kind === 'RECEIPT') {
+    return [buildReceiptText(job)]
   }
 
   const tickets = Array.isArray(job.payload?.tickets) ? job.payload.tickets : []
@@ -364,6 +421,7 @@ function getJobKind(job: PrintJob) {
   const kind = job.payload?.kind
 
   if (kind === 'BUY_LIST') return 'Lista de compras'
+  if (kind === 'RECEIPT') return 'Recibo'
   if (kind === 'ORDER_TICKET') return 'Pedido'
   if (kind === 'TEST') return 'Teste'
 
