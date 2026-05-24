@@ -89,6 +89,12 @@ type PrintJob = {
   createdAt: string
 }
 
+type PrintJobPackage = {
+  packageId: string
+  jobs: PrintJob[]
+  count: number
+}
+
 type VersionCheckResult = {
   latestVersion: string
   currentVersion?: string
@@ -1110,7 +1116,7 @@ export default function TerminalPage() {
     }
   }
 
-  async function printJob(job: PrintJob) {
+  async function printJob(job: PrintJob, options: { syncStatus?: boolean } = {}) {
     if (!registeredDevice?.id) {
       throw new Error('Terminal não registrado.')
     }
@@ -1125,7 +1131,11 @@ export default function TerminalPage() {
       )
     }
 
-    await updateJobStatus(job.id, 'PRINTING')
+    const syncStatus = options.syncStatus ?? true
+
+    if (syncStatus) {
+      await updateJobStatus(job.id, 'PRINTING')
+    }
 
     const ticketTexts = buildTicketTexts(job)
 
@@ -1146,7 +1156,9 @@ export default function TerminalPage() {
       }
     }
 
-    await updateJobStatus(job.id, 'PRINTED')
+    if (syncStatus) {
+      await updateJobStatus(job.id, 'PRINTED')
+    }
   }
 
   async function manuallyPrintJob(job: PrintJob) {
@@ -1170,44 +1182,82 @@ export default function TerminalPage() {
     }
   }
 
+
+  async function updatePackageStatus(jobIds: string[], status: string, errorMessage?: string) {
+    if (!registeredDevice?.id) {
+      throw new Error('Terminal não registrado.')
+    }
+
+    await apiFetch('/print-jobs/terminal/package/status', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        terminalDeviceId: registeredDevice.id,
+        jobIds,
+        status,
+        errorMessage,
+      }),
+    })
+
+    if (status === 'PRINTED') {
+      setJobs((current) => current.filter((job) => !jobIds.includes(job.id)))
+    }
+  }
+
+  async function claimPrintPackage() {
+    if (!registeredDevice?.id) {
+      throw new Error('Terminal não registrado.')
+    }
+
+    const result = await apiFetch<{ package: PrintJobPackage }>(
+      `/print-jobs/terminal/package/claim?terminalDeviceId=${encodeURIComponent(registeredDevice.id)}`,
+      { method: 'POST' }
+    )
+
+    return result.package
+  }
+
   async function pollJobs(options?: { manual?: boolean }) {
     if (!registeredDevice?.id || pollingRef.current) return
 
     try {
       pollingRef.current = true
 
-      const result = await apiFetch<{ jobs: PrintJob[] }>(
-        `/print-jobs/terminal/pending?terminalDeviceId=${encodeURIComponent(registeredDevice.id)}`
-      )
+      const printPackage = await claimPrintPackage()
+      const packageJobs = printPackage.jobs ?? []
 
-      setJobs(result.jobs ?? [])
+      setJobs(packageJobs)
       setLastPollAt(new Date().toISOString())
 
       if (options?.manual) {
         notify({
           tone: 'info',
-          title: 'Fila atualizada',
-          text: `${result.jobs?.length ?? 0} job(s) pendente(s).`,
+          title: 'Pacote de impressão atualizado',
+          text: `${packageJobs.length} job(s) no pacote atual.`,
         })
       }
 
-      if (!autoPrint) return
+      if (!autoPrint || packageJobs.length === 0) return
 
-      for (const job of result.jobs ?? []) {
-        try {
-          if (job.status === 'PENDING') {
-            await claimJob(job.id)
-          }
-          await printJob(job)
-        } catch (err) {
-          await updateJobStatus(job.id, 'FAILED', err instanceof Error ? err.message : 'Erro ao imprimir.').catch(() => null)
+      const jobIds = packageJobs.map((job) => job.id)
+
+      try {
+        await updatePackageStatus(jobIds, 'PRINTING')
+
+        for (const job of packageJobs) {
+          await printJob(job, { syncStatus: false })
         }
+
+        await updatePackageStatus(jobIds, 'PRINTED')
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Erro ao imprimir pacote.'
+        await updatePackageStatus(jobIds, 'FAILED', message).catch(() => null)
+        throw err
       }
     } catch (err) {
       if (options?.manual) {
-        setError(err instanceof Error ? err.message : 'Erro ao consultar fila de impressão.')
+        setError(err instanceof Error ? err.message : 'Erro ao consultar pacote de impressão.')
       } else {
-        console.error('Erro ao consultar fila de impressão:', err)
+        console.error('Erro ao consultar pacote de impressão:', err)
       }
     } finally {
       pollingRef.current = false
