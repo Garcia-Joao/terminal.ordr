@@ -365,7 +365,7 @@ function buildReceiptText(job: PrintJob) {
   lines.push(`Subtotal: ${formatCurrencyValue(payload.subtotal)}`)
 
   if (payload.taxApplied) {
-    lines.push(`Taxa 10%: ${formatCurrencyValue(payload.taxAmount)}`)
+    lines.push(`Taxa ${Number(payload.taxRate ?? 10).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%: ${formatCurrencyValue(payload.taxAmount)}`)
   }
 
   lines.push(`TOTAL: ${formatCurrencyValue(payload.total)}`)
