@@ -5,6 +5,9 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from 'react'
 const API_BASE_URL = 'https://api.panelordr.com.br'
 const DOWNLOAD_PAGE_URL = 'https://panelordr.com.br/terminal'
 const CURRENT_TERMINAL_VERSION = '1.0.0'
+const TERMINAL_POLL_INTERVAL_MS = 4_000
+const MAX_VISIBLE_QUEUE_ITEMS = 80
+
 
 type PrinterInfo = {
   name: string
@@ -191,6 +194,18 @@ function formatRelativeStatus(value?: string | null) {
 
   const hours = Math.floor(minutes / 60)
   return `${hours}h atrás`
+}
+
+function getVisibleQueueJobs(jobs: PrintJob[]) {
+  return jobs.slice(0, MAX_VISIBLE_QUEUE_ITEMS)
+}
+
+async function yieldToRenderer() {
+  if (typeof window === 'undefined') return
+
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, 0)
+  })
 }
 
 function isFieldEnabled(template: any, field: string, fallback = true) {
@@ -522,6 +537,8 @@ export default function TerminalPage() {
   const [registeredDevice, setRegisteredDevice] = useState<RegisteredDevice | null>(null)
   const [ports, setPorts] = useState<PrintPort[]>([])
   const [jobs, setJobs] = useState<PrintJob[]>([])
+  const [hiddenJobCount, setHiddenJobCount] = useState(0)
+  const [packageProgress, setPackageProgress] = useState<{ current: number; total: number } | null>(null)
   const [isElectron, setIsElectron] = useState(false)
   const [autoPrint, setAutoPrint] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
@@ -538,6 +555,7 @@ export default function TerminalPage() {
   const [toast, setToast] = useState<ToastState | null>(null)
 
   const pollingRef = useRef(false)
+  const processingPackageRef = useRef(false)
   const bootedRef = useRef(false)
 
   const isJobProcessing = (jobId: string) => processingJobIds.includes(jobId)
@@ -1045,6 +1063,7 @@ export default function TerminalPage() {
             text,
           })
         }
+        await yieldToRenderer()
       }
 
       notify({
@@ -1153,6 +1172,7 @@ export default function TerminalPage() {
             text,
           })
         }
+        await yieldToRenderer()
       }
     }
 
@@ -1200,6 +1220,7 @@ export default function TerminalPage() {
 
     if (status === 'PRINTED') {
       setJobs((current) => current.filter((job) => !jobIds.includes(job.id)))
+      setHiddenJobCount(0)
     }
   }
 
@@ -1217,15 +1238,17 @@ export default function TerminalPage() {
   }
 
   async function pollJobs(options?: { manual?: boolean }) {
-    if (!registeredDevice?.id || pollingRef.current) return
+    if (!registeredDevice?.id || pollingRef.current || processingPackageRef.current) return
 
     try {
       pollingRef.current = true
 
       const printPackage = await claimPrintPackage()
       const packageJobs = printPackage.jobs ?? []
+      const visibleJobs = getVisibleQueueJobs(packageJobs)
 
-      setJobs(packageJobs)
+      setJobs(visibleJobs)
+      setHiddenJobCount(Math.max(0, packageJobs.length - visibleJobs.length))
       setLastPollAt(new Date().toISOString())
 
       if (options?.manual) {
@@ -1241,10 +1264,17 @@ export default function TerminalPage() {
       const jobIds = packageJobs.map((job) => job.id)
 
       try {
+        processingPackageRef.current = true
+        setPackageProgress({ current: 0, total: packageJobs.length })
         await updatePackageStatus(jobIds, 'PRINTING')
+        await yieldToRenderer()
 
-        for (const job of packageJobs) {
+        for (let index = 0; index < packageJobs.length; index += 1) {
+          const job = packageJobs[index]
+          setPackageProgress({ current: index + 1, total: packageJobs.length })
+          await yieldToRenderer()
           await printJob(job, { syncStatus: false })
+          await yieldToRenderer()
         }
 
         await updatePackageStatus(jobIds, 'PRINTED')
@@ -1252,6 +1282,9 @@ export default function TerminalPage() {
         const message = err instanceof Error ? err.message : 'Erro ao imprimir pacote.'
         await updatePackageStatus(jobIds, 'FAILED', message).catch(() => null)
         throw err
+      } finally {
+        processingPackageRef.current = false
+        setPackageProgress(null)
       }
     } catch (err) {
       if (options?.manual) {
@@ -1351,7 +1384,7 @@ export default function TerminalPage() {
     if (!registeredDevice?.id) return
 
     pollJobs()
-    const interval = window.setInterval(() => pollJobs(), 2500)
+    const interval = window.setInterval(() => pollJobs(), TERMINAL_POLL_INTERVAL_MS)
 
     return () => window.clearInterval(interval)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1505,7 +1538,7 @@ export default function TerminalPage() {
         <section className="terminal-metric-grid">
           <MetricCard label="Impressoras" value={printers.length} hint="detectadas neste PC" tone="blue" />
           <MetricCard label="Ports" value={ports.length} hint={`${boundPorts.length} vinculada(s)`} tone="violet" />
-          <MetricCard label="Fila" value={jobs.length} hint={autoPrint ? 'processamento automático' : 'revisão manual'} tone="orange" />
+          <MetricCard label="Fila" value={jobs.length + hiddenJobCount} hint={packageProgress ? `${packageProgress.current}/${packageProgress.total} no pacote` : autoPrint ? 'processamento automático' : 'revisão manual'} tone="orange" />
           <MetricCard label="Status" value={registeredDevice?.printTerminalEnabled ? 'ON' : 'OFF'} hint={formatRelativeStatus(registeredDevice?.lastSeenAt)} tone="green" />
         </section>
 
@@ -1525,6 +1558,12 @@ export default function TerminalPage() {
             </div>
 
             <div className="queue-list">
+              {packageProgress && (
+                <div className="rounded-2xl border border-primary/20 bg-primary/10 px-4 py-3 text-sm font-black text-primary">
+                  Processando pacote: {packageProgress.current}/{packageProgress.total}
+                </div>
+              )}
+
               {jobs.map((job) => {
                 const processing = isJobProcessing(job.id)
                 const manualActionsEnabled = !autoPrint && registeredDevice?.id
@@ -1566,6 +1605,12 @@ export default function TerminalPage() {
                   </article>
                 )
               })}
+
+              {hiddenJobCount > 0 && (
+                <div className="rounded-2xl border border-border bg-muted/40 px-4 py-3 text-sm font-semibold text-muted-foreground">
+                  +{hiddenJobCount} item(ns) neste pacote foram ocultados para manter o Terminal leve.
+                </div>
+              )}
 
               {jobs.length === 0 && (
                 <EmptyState
